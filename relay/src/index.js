@@ -85,13 +85,15 @@ async function openSoniox(env, out) {
     enable_endpoint_detection: true,
     context: { general: [{ key: "domain", value: "Hong Kong Cantonese conversation" }], text: "以粵語口語書寫，例如：佢哋喺度講緊嘢，我哋聽日去咗飲茶。" },
   }));
+  let lineStart = true;   // tokens after an endpoint start with a space; a new line shouldn't
   ws.addEventListener("message", (e) => {
     const m = JSON.parse(e.data);
     if (m.error_code) return out.error(`Soniox ${m.error_code}: ${m.error_message}`);
     let commit = "", pending = "";
     for (const t of m.tokens || []) {
-      const text = t.text === "<end>" ? "\n" : t.text;
-      if (t.is_final) commit += text; else if (t.text !== "<end>") pending += text;
+      if (t.text === "<end>") { if (t.is_final) { commit += "\n"; lineStart = true; } continue; }
+      const text = lineStart && !(commit + pending).trim() ? t.text.trimStart() : t.text;
+      if (t.is_final) { commit += text; if (text) lineStart = false; } else pending += text;
     }
     if (commit || pending || m.tokens?.length === 0) out.text(commit, pending);
     if (m.finished) out.done();
