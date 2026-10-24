@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>粵語即時字幕</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#14110f">
+<style>
+  :root {
+    --bg: #faf7f2; --fg: #1d1a17; --muted: #8a8178; --line: #e6dfd5; --accent: #c2410c; --pending: #a8a097;
+    --card: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14110f; --fg: #f2ede6; --muted: #9a9087; --line: #2c2723; --accent: #fb923c; --pending: #6f665e; --card: #1c1815; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
+  body {
+    font-family: -apple-system, "PingFang HK", "Noto Sans HK", "Microsoft JhengHei", system-ui, sans-serif;
+    display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 16px; border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 17px; font-weight: 600; margin: 0; flex: 1; letter-spacing: .02em; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button {
+    font: inherit; font-size: 14px; border: 0; background: transparent; color: var(--muted);
+    padding: 8px 12px; cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+  .seg button:disabled { cursor: default; }
+  main { flex: 1; overflow-y: auto; padding: 20px 16px 140px; scroll-behavior: smooth; }
+  #text {
+    max-width: 920px; margin: 0 auto; font-size: clamp(22px, 3.2vw, 34px); line-height: 1.6;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  #pending { color: var(--pending); }
+  .hint { color: var(--muted); font-size: 16px; line-height: 1.6; max-width: 920px; margin: 0 auto; }
+  footer {
+    position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; align-items: center; gap: 14px;
+    padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+    background: linear-gradient(transparent, var(--bg) 35%);
+  }
+  #mic {
+    font: inherit; font-size: 17px; font-weight: 600; border: 0; border-radius: 999px; padding: 15px 34px;
+    background: var(--accent); color: #fff; cursor: pointer; min-width: 168px;
+  }
+  #mic.on { background: var(--fg); color: var(--bg); }
+  #clear { font: inherit; font-size: 15px; background: none; border: 0; color: var(--muted); cursor: pointer; padding: 10px; }
+  #status { position: fixed; left: 0; right: 0; bottom: calc(84px + env(safe-area-inset-bottom)); text-align: center; font-size: 13px; color: var(--muted); }
+  #status.err { color: var(--accent); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 6px; animation: p 1.2s infinite; }
+  @keyframes p { 50% { opacity: .25; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>粵語即時字幕</h1>
+  <div class="seg" role="group" aria-label="Speech engine">
+    <button data-p="soniox" aria-pressed="true">Soniox</button>
+    <button data-p="funasr" aria-pressed="false">Fun-ASR</button>
+  </div>
+</header>
+<main id="scroll">
+  <p class="hint" id="hint">撳「開始」，對住咪講廣東話，字幕會即時出現。</p>
+  <div id="text"><span id="done"></span><span id="pending"></span></div>
+</main>
+<div id="status"></div>
+<footer>
+  <button id="clear">清除</button>
+  <button id="mic">開始</button>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+let provider = "soniox";
+try { provider = localStorage.getItem("provider") || provider; } catch {}
+const segButtons = document.querySelectorAll(".seg button");
+function showProvider() { segButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.p === provider))); }
+showProvider();
+segButtons.forEach((b) => b.onclick = () => {
+  if (b.dataset.p === provider) return;
+  provider = b.dataset.p; showProvider();
+  try { localStorage.setItem("provider", provider); } catch {}
+  if (session) { stop(); start(); }   // switching mid-stream restarts on the new engine
+});
+
+let session = null;
+function status(msg, err) { $("status").className = err ? "err" : ""; $("status").innerHTML = msg; }
+function stick() { const s = $("scroll"); if (s.scrollHeight - s.scrollTop - s.clientHeight < 200) s.scrollTop = s.scrollHeight; }
+
+// AudioWorklet: resample the mic to 16 kHz mono s16le, posting 100 ms chunks.
+const worklet = `
+class Pcm16 extends AudioWorkletProcessor {
+  constructor() { super(); this.ratio = sampleRate / 16000; this.pos = 0; this.buf = new Int16Array(1600); this.n = 0; }
+  process(inputs) {
+    const ch = inputs[0][0]; if (!ch) return true;
+    while (this.pos < ch.length) {
+      const s = Math.max(-1, Math.min(1, ch[Math.floor(this.pos)]));
+      this.buf[this.n++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      if (this.n === this.buf.length) { this.port.postMessage(this.buf.buffer.slice(0)); this.n = 0; }
+      this.pos += this.ratio;
+    }
+    this.pos -= ch.length;
+    return true;
+  }
+}
+registerProcessor("pcm16", Pcm16);`;
+
+async function start() {
+  $("hint").hidden = true;
+  $("mic").textContent = "停止"; $("mic").classList.add("on");
+  status("連接緊…");
+  const s = session = { ws: null, ctx: null, stream: null };
+  try {
+    s.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  } catch (e) { status("用唔到咪：" + e.message, true); return stop(); }
+  if (session !== s) return s.stream.getTracks().forEach((t) => t.stop());
+  s.ctx = new AudioContext();
+  await s.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([worklet], { type: "application/javascript" })));
+  const node = new AudioWorkletNode(s.ctx, "pcm16");
+  s.ctx.createMediaStreamSource(s.stream).connect(node);
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  s.ws = new WebSocket(`${proto}://${location.host}/ws?provider=${provider}`);
+  s.ws.binaryType = "arraybuffer";
+  node.port.onmessage = (e) => { if (s.ws.readyState === 1) s.ws.send(e.data); };
+  s.ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === "ready") status('<span class="dot"></span>聽緊');
+    else if (m.type === "text") {
+      if (m.commit) $("done").textContent += m.commit;
+      $("pending").textContent = m.pending;
+      stick();
+    } else if (m.type === "error") status(m.message, true);
+  };
+  s.ws.onclose = () => { if (session === s) { status("連線斷咗，再撳開始", true); stop(true); } };
+}
+
+function stop(keepStatus) {
+  const s = session; session = null;
+  $("mic").textContent = "開始"; $("mic").classList.remove("on");
+  if (!keepStatus) status("");
+  if (!s) return;
+  s.stream?.getTracks().forEach((t) => t.stop());
+  s.ctx?.close();
+  if (s.ws) { s.ws.onclose = null; if (s.ws.readyState === 1) s.ws.send("stop"); setTimeout(() => s.ws.close(), 3000); }
+}
+
+$("mic").onclick = () => session ? stop() : start();
+$("clear").onclick = () => { $("done").textContent = ""; $("pending").textContent = ""; };
+</script>
+</body>
+</html>

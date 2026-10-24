@@ -1,0 +1,42 @@
+# Deploys the relay Worker (and the web page it serves) to cantonese.deyaochen.com, injects the provider keys as Worker
+# secrets from this repo's GitHub secrets, then streams the Cantonese test clip through the live relay for every
+# provider with the iOS app's Access service token. A Workers deploy switches versions atomically (no downtime).
+name: relay
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["relay/**", "scripts/relay-test.mjs", "testdata/**", ".github/workflows/relay.yml"]
+concurrency: { group: relay, cancel-in-progress: false }
+permissions: { contents: read }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults: { run: { working-directory: relay } }
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ee3b4deef856baf11e1a67b242438325
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: relay/package-lock.json }
+      - run: npm ci
+      - name: Deploy with secrets
+        env:
+          SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          FUNASR_WORKSPACE: ${{ vars.FUNASR_WORKSPACE }}
+        run: |
+          [ -n "$FUNASR_WORKSPACE" ] && sed -i "s/WORKSPACE\./$FUNASR_WORKSPACE./" wrangler.toml
+          umask 077
+          jq -n '{SONIOX_API_KEY: env.SONIOX_API_KEY, DASHSCOPE_API_KEY: env.DASHSCOPE_API_KEY}' > "$RUNNER_TEMP/secrets.json"
+          npx wrangler deploy --secrets-file "$RUNNER_TEMP/secrets.json"
+          rm -f "$RUNNER_TEMP/secrets.json"
+      - name: Live test (both providers)
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          for i in 1 2 3 4 5 6; do curl -sf -o /dev/null -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" https://cantonese.deyaochen.com/health && break; sleep 10; done
+          node ../scripts/relay-test.mjs

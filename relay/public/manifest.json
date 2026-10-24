@@ -1,0 +1,1 @@
+{ "name": "粵語即時字幕", "short_name": "粵語字幕", "start_url": "/", "display": "standalone", "background_color": "#14110f", "theme_color": "#14110f" , "icons": [{ "src": "icon.png", "sizes": "1024x1024", "type": "image/png" }] }
