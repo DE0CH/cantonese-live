@@ -1,9 +1,9 @@
-// Relay between the clients (web page, iOS app) and the speech providers. Cloudflare Access sits in front of the
+// Relay between the clients (web page, iOS app) and Soniox. Cloudflare Access sits in front of the
 // whole hostname, so a request that reaches this code is Deyao's browser or the app's service token.
 //
-// Client protocol (GET /ws?provider=soniox|funasr[&style=written], WebSocket):
+// Client protocol (GET /ws[?style=written], WebSocket):
 //   client -> relay: binary frames of 16 kHz mono PCM s16le; the text frame "stop" ends the stream.
-//   relay -> client: {"type":"ready"} once the provider accepts audio,
+//   relay -> client: {"type":"ready"} once Soniox accepts audio,
 //                    {"type":"text","commit":"…","pending":"…"} (commit: append for good; pending: replaces the
 //                    previous pending text; "\n" in commit ends a line), {"type":"error","message":"…"},
 //                    {"type":"done"}. With style=written, each finished line (0-based, counted by the "\n"s in
@@ -11,8 +11,7 @@
 
 import * as OpenCC from "opencc-js";
 
-const PROVIDERS = { soniox: openSoniox, funasr: openFunAsr };
-// Both engines may answer in Simplified characters; the app shows Hong Kong Traditional.
+// Soniox may answer in Simplified characters; the app shows Hong Kong Traditional.
 const toHK = OpenCC.Converter({ from: "cn", to: "hk" });
 
 // 書面語: one line of mixed Cantonese / Mandarin / English speech, rewritten by Qwen through OpenRouter.
@@ -39,14 +38,12 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/ws") {
       if (request.headers.get("Upgrade") !== "websocket") return new Response("expected a WebSocket", { status: 426 });
-      const open = PROVIDERS[url.searchParams.get("provider")];
-      if (!open) return new Response("unknown provider", { status: 400 });
       const [client, server] = Object.values(new WebSocketPair());
       server.accept();
-      relay(server, open, env, url.searchParams.get("style") === "written").catch((e) => fail(server, String(e?.message || e)));
+      relay(server, env, url.searchParams.get("style") === "written").catch((e) => fail(server, String(e?.message || e)));
       return new Response(null, { status: 101, webSocket: client });
     }
-    if (url.pathname === "/health") return Response.json({ ok: true, providers: Object.keys(PROVIDERS) });
+    if (url.pathname === "/health") return Response.json({ ok: true });
     return env.ASSETS.fetch(request);
   },
 };
@@ -57,33 +54,33 @@ function send(ws, msg) {
 
 function fail(ws, message) {
   send(ws, { type: "error", message });
-  try { ws.close(1011, "provider error"); } catch {}
+  try { ws.close(1011, "speech error"); } catch {}
 }
 
 async function upstream(url, headers) {
   const res = await fetch(url, { headers: { Upgrade: "websocket", ...headers } });
-  if (!res.webSocket) throw new Error(`provider refused the connection (HTTP ${res.status}): ${(await res.text()).slice(0, 200)}`);
+  if (!res.webSocket) throw new Error(`Soniox refused the connection (HTTP ${res.status}): ${(await res.text()).slice(0, 200)}`);
   res.webSocket.accept();
   return res.webSocket;
 }
 
-async function relay(client, open, env, written) {
-  // Audio that arrives before the provider is ready is queued, not dropped.
+async function relay(client, env, written) {
+  // Audio that arrives before Soniox is ready is queued, not dropped.
   const queue = [];
-  let provider = null, stopped = false;
+  let stream = null, stopped = false;
   // Binary frames may arrive as Blobs; reading them is async, so a chain keeps the audio in order.
   let chain = Promise.resolve();
   client.addEventListener("message", (e) => {
     chain = chain.then(async () => {
       if (typeof e.data === "string") {
-        if (e.data === "stop") { stopped = true; provider?.stop(); }
+        if (e.data === "stop") { stopped = true; stream?.stop(); }
         return;
       }
       const chunk = e.data instanceof Blob ? await e.data.arrayBuffer() : e.data;
-      provider ? provider.audio(chunk) : queue.push(chunk);
+      stream ? stream.audio(chunk) : queue.push(chunk);
     });
   });
-  client.addEventListener("close", () => { stopped = true; provider?.close(); });
+  client.addEventListener("close", () => { stopped = true; stream?.close(); });
   // style=written: collect each line's committed text and rewrite it once the line ends (and the last one at the end).
   let line = 0, current = "", finished = false;
   const rewrites = [];
@@ -93,7 +90,7 @@ async function relay(client, open, env, written) {
     if (!written || !/[\u4e00-\u9fff]/.test(text)) return;
     rewrites.push(rewrite(env, text).then((t) => send(client, { type: "rewrite", line: n, text: t }), (e) => send(client, { type: "error", message: String(e.message || e) })));
   };
-  provider = await open(env, {
+  stream = await openSoniox(env, {
     text: (commit, pending) => {
       commit = toHK(commit);
       send(client, { type: "text", commit, pending: toHK(pending) });
@@ -112,8 +109,8 @@ async function relay(client, open, env, written) {
     },
   });
   send(client, { type: "ready" });
-  for (const chunk of queue.splice(0)) provider.audio(chunk);
-  if (stopped) provider.stop();
+  for (const chunk of queue.splice(0)) stream.audio(chunk);
+  if (stopped) stream.stop();
 }
 
 // Soniox real-time: https://soniox.com/docs/stt/api-reference/websocket-api
@@ -145,44 +142,6 @@ async function openSoniox(env, out) {
   return {
     audio: (chunk) => ws.send(new Uint8Array(chunk)),
     stop: () => ws.send(""),
-    close: () => { try { ws.close(); } catch {} },
-  };
-}
-
-// Alibaba Model Studio Fun-ASR realtime: https://help.aliyun.com/zh/model-studio/fun-asr-realtime-websocket-api
-async function openFunAsr(env, out) {
-  const ws = await upstream(env.FUNASR_URL, { Authorization: `Bearer ${env.DASHSCOPE_API_KEY}` });
-  const taskId = crypto.randomUUID().replaceAll("-", "");
-  let started = false;
-  const ready = new Promise((resolve, reject) => {
-    ws.addEventListener("message", (e) => {
-      const m = JSON.parse(e.data);
-      const event = m.header?.event;
-      if (event === "task-started") { started = true; resolve(); }
-      else if (event === "result-generated") {
-        const s = m.payload?.output?.sentence;
-        if (!s || s.heartbeat) return;
-        s.sentence_end ? out.text(s.text + "\n", "") : out.text("", s.text);
-      } else if (event === "task-finished") { out.done(); ws.close(); }
-      else if (event === "task-failed") {
-        const msg = `Fun-ASR ${m.header.error_code}: ${m.header.error_message}`;
-        started ? out.error(msg) : reject(new Error(msg));
-      }
-    });
-  });
-  ws.addEventListener("close", () => out.done());
-  ws.send(JSON.stringify({
-    header: { action: "run-task", task_id: taskId, streaming: "duplex" },
-    payload: {
-      task_group: "audio", task: "asr", function: "recognition", model: "fun-asr-realtime",
-      parameters: { format: "pcm", sample_rate: 16000 },
-      input: {},
-    },
-  }));
-  await ready;
-  return {
-    audio: (chunk) => ws.send(new Uint8Array(chunk)),
-    stop: () => ws.send(JSON.stringify({ header: { action: "finish-task", task_id: taskId, streaming: "duplex" }, payload: { input: {} } })),
     close: () => { try { ws.close(); } catch {} },
   };
 }

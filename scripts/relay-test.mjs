@@ -1,6 +1,6 @@
 // Live check of the deployed relay: streams testdata/cantonese-16k.wav at real-time pace through
-// wss://$RELAY_HOST/ws for each provider, spoken and written (書面語), with the iOS app's Access service token, and
-// prints what came back. Fails unless spoken keeps 我哋 and written turns every line into 我們-style written Chinese.
+// wss://$RELAY_HOST/ws raw (原文) and written (書面語), with the iOS app's Access service token, and
+// prints what came back. Fails unless raw keeps 我哋 and written turns every line into 我們-style written Chinese.
 // Env: RELAY_HOST, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET.
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -8,11 +8,10 @@ const WebSocket = createRequire(new URL("../relay/package.json", import.meta.url
 
 const pcm = readFileSync(new URL("../testdata/cantonese-16k.wav", import.meta.url)).subarray(44);
 const host = process.env.RELAY_HOST || "cantonese.deyaochen.com";
-const providers = (process.argv[2] || "soniox,funasr").split(",");
 
-function run(provider, style) {
+function run(style) {
   return new Promise((resolve) => {
-    const ws = new WebSocket(`wss://${host}/ws?provider=${provider}&style=${style}`, {
+    const ws = new WebSocket(`wss://${host}/ws?style=${style}`, {
       headers: { "CF-Access-Client-Id": process.env.CF_ACCESS_CLIENT_ID, "CF-Access-Client-Secret": process.env.CF_ACCESS_CLIENT_SECRET },
     });
     let text = "", firstText = 0, error = "";
@@ -37,18 +36,18 @@ function run(provider, style) {
     ws.on("close", () => {
       clearTimeout(timer);
       const spoken = text.trim().split("\n");
-      resolve({ provider, style, text: spoken.map((l, i) => rewritten[i] ?? l).join("\n"), firstText, error });
+      resolve({ style, text: spoken.map((l, i) => rewritten[i] ?? l).join("\n"), firstText, error });
     });
     ws.on("error", (e) => { error ||= e.message; });
   });
 }
 
 let ok = true;
-for (const p of providers) for (const style of ["spoken", "written"]) {
-  const r = await run(p, style);
+for (const style of ["raw", "written"]) {
+  const r = await run(style);
   const good = !r.error && /[\u4e00-\u9fff]{4,}/.test(r.text) &&
-    (style === "spoken" ? r.text.includes("我哋") : r.text.includes("我們") && !/[哋咗嘅啲嚟]/.test(r.text));
+    (style === "raw" ? r.text.includes("我哋") : r.text.includes("我們") && !/[哋咗嘅啲嚟]/.test(r.text));
   ok &&= good;
-  console.log(`${good ? "PASS" : "FAIL"} ${p} ${style}: first text after ${r.firstText} ms: ${JSON.stringify(r.text)}${r.error ? " error: " + r.error : ""}`);
+  console.log(`${good ? "PASS" : "FAIL"} ${style}: first text after ${r.firstText} ms: ${JSON.stringify(r.text)}${r.error ? " error: " + r.error : ""}`);
 }
 process.exit(ok ? 0 : 1);

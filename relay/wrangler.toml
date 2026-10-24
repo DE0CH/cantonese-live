@@ -1,4 +1,4 @@
-# Deploy: wrangler deploy (CLOUDFLARE_API_TOKEN). Secrets: wrangler secret put SONIOX_API_KEY / DASHSCOPE_API_KEY.
+# Deploy: wrangler deploy (CLOUDFLARE_API_TOKEN). Secrets: SONIOX_API_KEY, OPENROUTER_API_KEY (CI).
 # Only reachable on the Access-gated custom domain: workers.dev and preview URLs are off.
 name = "cantonese-live"
 main = "src/index.js"
@@ -10,7 +10,3 @@ routes = [{ pattern = "cantonese.deyaochen.com", custom_domain = true }]
 [assets]
 directory = "public"
 binding = "ASSETS"
-
-[vars]
-# Fun-ASR's workspace endpoint (Beijing, 默认业务空间); the workspace id is not secret.
-FUNASR_URL = "https://ws-tr2d9im94sooqh7l.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"
