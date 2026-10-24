@@ -1,6 +1,7 @@
 // Live check of the deployed relay: streams testdata/cantonese-16k.wav at real-time pace through
-// wss://$RELAY_HOST/ws for each provider, with the iOS app's Access service token, and prints what came back.
-// Fails unless every provider returns Cantonese text. Env: RELAY_HOST, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET.
+// wss://$RELAY_HOST/ws for each provider, spoken and written (書面語), with the iOS app's Access service token, and
+// prints what came back. Fails unless spoken keeps 我哋 and written turns every line into 我們-style written Chinese.
+// Env: RELAY_HOST, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET.
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 const WebSocket = createRequire(new URL("../relay/package.json", import.meta.url))("ws");
@@ -9,12 +10,13 @@ const pcm = readFileSync(new URL("../testdata/cantonese-16k.wav", import.meta.ur
 const host = process.env.RELAY_HOST || "cantonese.deyaochen.com";
 const providers = (process.argv[2] || "soniox,funasr").split(",");
 
-function run(provider) {
+function run(provider, style) {
   return new Promise((resolve) => {
-    const ws = new WebSocket(`wss://${host}/ws?provider=${provider}`, {
+    const ws = new WebSocket(`wss://${host}/ws?provider=${provider}&style=${style}`, {
       headers: { "CF-Access-Client-Id": process.env.CF_ACCESS_CLIENT_ID, "CF-Access-Client-Secret": process.env.CF_ACCESS_CLIENT_SECRET },
     });
     let text = "", firstText = 0, error = "";
+    const rewritten = [];
     const t0 = Date.now();
     const timer = setTimeout(() => { error ||= "timed out"; ws.terminate(); }, 60000);
     ws.on("unexpected-response", (_, res) => { error = `HTTP ${res.statusCode}`; });
@@ -28,19 +30,25 @@ function run(provider) {
     ws.on("message", (d) => {
       const m = JSON.parse(d.toString());
       if (m.type === "text") { if (!firstText && (m.commit || m.pending)) firstText = Date.now() - t0; text += m.commit; }
+      if (m.type === "rewrite") rewritten[m.line] = m.text;
       if (m.type === "error") error = m.message;
       if (m.type === "done") ws.close();
     });
-    ws.on("close", () => { clearTimeout(timer); resolve({ provider, text: text.trim(), firstText, error }); });
+    ws.on("close", () => {
+      clearTimeout(timer);
+      const spoken = text.trim().split("\n");
+      resolve({ provider, style, text: spoken.map((l, i) => rewritten[i] ?? l).join("\n"), firstText, error });
+    });
     ws.on("error", (e) => { error ||= e.message; });
   });
 }
 
 let ok = true;
-for (const p of providers) {
-  const r = await run(p);
-  const good = !r.error && /[一-鿿]{4,}/.test(r.text);
+for (const p of providers) for (const style of ["spoken", "written"]) {
+  const r = await run(p, style);
+  const good = !r.error && /[\u4e00-\u9fff]{4,}/.test(r.text) &&
+    (style === "spoken" ? r.text.includes("我哋") : r.text.includes("我們") && !/[哋咗嘅啲嚟]/.test(r.text));
   ok &&= good;
-  console.log(`${good ? "PASS" : "FAIL"} ${p}: first text after ${r.firstText} ms: ${JSON.stringify(r.text)}${r.error ? " error: " + r.error : ""}`);
+  console.log(`${good ? "PASS" : "FAIL"} ${p} ${style}: first text after ${r.firstText} ms: ${JSON.stringify(r.text)}${r.error ? " error: " + r.error : ""}`);
 }
 process.exit(ok ? 0 : 1);

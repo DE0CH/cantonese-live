@@ -26,9 +26,10 @@ jobs:
         env:
           SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           umask 077
-          jq -n '{SONIOX_API_KEY: env.SONIOX_API_KEY, DASHSCOPE_API_KEY: env.DASHSCOPE_API_KEY}' > "$RUNNER_TEMP/secrets.json"
+          jq -n '{SONIOX_API_KEY: env.SONIOX_API_KEY, DASHSCOPE_API_KEY: env.DASHSCOPE_API_KEY, OPENROUTER_API_KEY: env.OPENROUTER_API_KEY}' > "$RUNNER_TEMP/secrets.json"
           npx wrangler deploy --secrets-file "$RUNNER_TEMP/secrets.json"
           rm -f "$RUNNER_TEMP/secrets.json"
       - name: Live test (both providers)

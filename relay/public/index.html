@@ -25,7 +25,7 @@
     padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
   }
   header {
-    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     padding: 14px 16px; border-bottom: 1px solid var(--line);
   }
   h1 { font-size: 17px; font-weight: 600; margin: 0; flex: 1; letter-spacing: .02em; }
@@ -63,7 +63,11 @@
 <body>
 <header>
   <h1>粵語即時字幕</h1>
-  <div class="seg" role="group" aria-label="Speech engine">
+  <div class="seg" role="group" aria-label="Writing style" id="styles">
+    <button data-s="spoken" aria-pressed="true">口語</button>
+    <button data-s="written" aria-pressed="false">書面語</button>
+  </div>
+  <div class="seg" role="group" aria-label="Speech engine" id="engines">
     <button data-p="soniox" aria-pressed="true">Soniox</button>
     <button data-p="funasr" aria-pressed="false">Fun-ASR</button>
   </div>
@@ -79,17 +83,31 @@
 </footer>
 <script>
 const $ = (id) => document.getElementById(id);
-let provider = "soniox";
-try { provider = localStorage.getItem("provider") || provider; } catch {}
-const segButtons = document.querySelectorAll(".seg button");
-function showProvider() { segButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.p === provider))); }
-showProvider();
-segButtons.forEach((b) => b.onclick = () => {
+let provider = "soniox", style = "spoken";
+try { provider = localStorage.getItem("provider") || provider; style = localStorage.getItem("style") || style; } catch {}
+const engineButtons = document.querySelectorAll("#engines button"), styleButtons = document.querySelectorAll("#styles button");
+function showChoices() {
+  engineButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.p === provider)));
+  styleButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.s === style)));
+}
+showChoices();
+// Switching mid-stream restarts on the new engine or style; lines already shown stay as they are.
+engineButtons.forEach((b) => b.onclick = () => {
   if (b.dataset.p === provider) return;
-  provider = b.dataset.p; showProvider();
+  provider = b.dataset.p; showChoices();
   try { localStorage.setItem("provider", provider); } catch {}
-  if (session) { stop(); start(); }   // switching mid-stream restarts on the new engine
+  if (session) { stop(); start(); }
 });
+styleButtons.forEach((b) => b.onclick = () => {
+  if (b.dataset.s === style) return;
+  style = b.dataset.s; showChoices();
+  try { localStorage.setItem("style", style); } catch {}
+  if (session) { stop(); start(); }
+});
+
+// The transcript as lines; a stream's line n is lines[base + n], so a rewrite can replace it.
+let lines = [""];
+function render() { $("done").textContent = lines.join("\n"); }
 
 let session = null;
 function status(msg, err) { $("status").className = err ? "err" : ""; $("status").innerHTML = msg; }
@@ -127,16 +145,25 @@ async function start() {
   const node = new AudioWorkletNode(s.ctx, "pcm16");
   s.ctx.createMediaStreamSource(s.stream).connect(node);
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  s.ws = new WebSocket(`${proto}://${location.host}/ws?provider=${provider}`);
+  if (lines[lines.length - 1]) lines.push("");
+  const base = lines.length - 1;
+  s.ws = new WebSocket(`${proto}://${location.host}/ws?provider=${provider}&style=${style}`);
   s.ws.binaryType = "arraybuffer";
   node.port.onmessage = (e) => { if (s.ws.readyState === 1) s.ws.send(e.data); };
   s.ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.type === "ready") status('<span class="dot"></span>聽緊');
     else if (m.type === "text") {
-      if (m.commit) $("done").textContent += m.commit;
+      if (m.commit) {
+        const parts = m.commit.split("\n");
+        lines[lines.length - 1] += parts[0];
+        lines.push(...parts.slice(1));
+        render();
+      }
       $("pending").textContent = m.pending;
       stick();
+    } else if (m.type === "rewrite") {
+      if (lines[base + m.line] !== undefined) { lines[base + m.line] = m.text; render(); }
     } else if (m.type === "error") status(m.message, true);
   };
   s.ws.onclose = () => { if (session === s) { status("連線斷咗，再撳開始", true); stop(true); } };
@@ -149,11 +176,11 @@ function stop(keepStatus) {
   if (!s) return;
   s.stream?.getTracks().forEach((t) => t.stop());
   s.ctx?.close();
-  if (s.ws) { s.ws.onclose = null; if (s.ws.readyState === 1) s.ws.send("stop"); setTimeout(() => s.ws.close(), 3000); }
+  if (s.ws) { s.ws.onclose = null; if (s.ws.readyState === 1) s.ws.send("stop"); setTimeout(() => s.ws.close(), 15000); }
 }
 
 $("mic").onclick = () => session ? stop() : start();
-$("clear").onclick = () => { $("done").textContent = ""; $("pending").textContent = ""; };
+$("clear").onclick = () => { lines = [""]; render(); $("pending").textContent = ""; };
 </script>
 </body>
 </html>
