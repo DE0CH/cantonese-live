@@ -87,7 +87,7 @@ async function openSoniox(env, out) {
     num_channels: 1,
     language_hints: ["zh", "en"],
     enable_endpoint_detection: true,
-    context: { general: [{ key: "domain", value: "Hong Kong Cantonese conversation" }] },
+    context: { general: [{ key: "domain", value: "Hong Kong trilingual conversation (Cantonese/English/Mandarin)" }] },
   }));
   let lineStart = true;   // tokens after an endpoint start with a space; a new line shouldn't
   ws.addEventListener("message", (e) => {
