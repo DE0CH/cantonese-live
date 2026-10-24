@@ -4,9 +4,13 @@
 // Client protocol (GET /ws, WebSocket):
 //   client -> relay: binary frames of 16 kHz mono PCM s16le; the text frame "stop" ends the stream.
 //   relay -> client: {"type":"ready"} once Soniox accepts audio,
-//                    {"type":"text","commit":"…","pending":"…"} (commit: append for good; pending: replaces the
-//                    previous pending text; "\n" in commit ends a line), {"type":"error","message":"…"},
+//                    {"type":"text","commit":"…","pending":"…","final_ms":N} (commit: append for good; pending:
+//                    replaces the previous pending text; "\n" in commit ends a line; final_ms: how much of this
+//                    stream's audio is finalized), {"type":"ping"} every second, {"type":"error","message":"…"},
 //                    {"type":"done"}.
+//
+// The relay keeps no session. A client that loses its connection opens a new one and replays its audio from the
+// last final_ms, so a network drop, a Soniox drop or a relay redeploy loses and repeats nothing.
 
 import * as OpenCC from "opencc-js";
 
@@ -62,12 +66,15 @@ async function relay(client, env) {
   });
   client.addEventListener("close", () => { stopped = true; stream?.close(); });
   let finished = false;
+  const ping = setInterval(() => send(client, { type: "ping" }), 1000);   // lets the client spot a dead connection
+  client.addEventListener("close", () => clearInterval(ping));
   stream = await openSoniox(env, {
-    text: (commit, pending) => send(client, { type: "text", commit: toHK(commit), pending: toHK(pending) }),
-    error: (m) => fail(client, m),
+    text: (commit, pending, finalMs) => send(client, { type: "text", commit: toHK(commit), pending: toHK(pending), final_ms: finalMs }),
+    error: (m) => { clearInterval(ping); fail(client, m); },
     done: () => {
       if (finished) return;
       finished = true;
+      clearInterval(ping);
       send(client, { type: "done" });
       try { client.close(1000, "done"); } catch {}
     },
@@ -99,7 +106,7 @@ async function openSoniox(env, out) {
       const text = lineStart && !(commit + pending).trim() ? t.text.trimStart() : t.text;
       if (t.is_final) { commit += text; if (text) lineStart = false; } else pending += text;
     }
-    if (commit || pending || m.tokens?.length === 0) out.text(commit, pending);
+    if (m.tokens) out.text(commit, pending, m.final_audio_proc_ms ?? 0);
     if (m.finished) out.done();
   });
   ws.addEventListener("close", () => out.done());
