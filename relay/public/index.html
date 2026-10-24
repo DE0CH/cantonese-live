@@ -46,6 +46,10 @@
     background: var(--accent); color: #fff; cursor: pointer; min-width: 168px;
   }
   #mic.on { background: var(--fg); color: var(--bg); }
+  #pop { font: inherit; font-size: 14px; background: none; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); cursor: pointer; padding: 6px 14px; }
+  @media (pointer: coarse) { #pop { display: none; } }
+  body.popped header { display: none; }
+  .popped-note { color: var(--muted); font-size: 16px; text-align: center; margin: 40vh 16px 0; }
   #clear { font: inherit; font-size: 15px; background: none; border: 0; color: var(--muted); cursor: pointer; padding: 10px; }
   #status { position: fixed; left: 0; right: 0; bottom: calc(84px + env(safe-area-inset-bottom)); text-align: center; font-size: 13px; color: var(--muted); }
   #status.err { color: var(--accent); }
@@ -56,6 +60,7 @@
 <body>
 <header>
   <h1>粵語即時字幕</h1>
+  <button id="pop" title="喺一個窄身、永遠喺最面嘅小視窗顯示字幕">彈出視窗</button>
 </header>
 <main id="scroll">
   <p class="hint" id="hint">撳「開始」，對住咪講廣東話，字幕會即時出現。</p>
@@ -67,7 +72,9 @@
   <button id="mic">開始</button>
 </footer>
 <script>
-const $ = (id) => document.getElementById(id);
+// Elements are looked up once: the pop-out moves them into another document.
+const els = Object.fromEntries([...document.querySelectorAll("[id]")].map((e) => [e.id, e]));
+const $ = (id) => els[id];
 
 let session = null;
 function status(msg, err) { $("status").className = err ? "err" : ""; $("status").innerHTML = msg; }
@@ -91,33 +98,55 @@ class Pcm16 extends AudioWorkletProcessor {
 }
 registerProcessor("pcm16", Pcm16);`;
 
+// A dropped connection reconnects by itself (1, 2, 4… up to 10 s apart) while the mic keeps recording; audio from
+// the gap is held (up to 60 s) and sent once the new stream is ready. Only 停止 ends a session.
 async function start() {
   $("hint").hidden = true;
   $("mic").textContent = "停止"; $("mic").classList.add("on");
   status("連接緊…");
-  const s = session = { ws: null, ctx: null, stream: null };
+  const s = session = { ws: null, ctx: null, stream: null, held: [], tries: 0, timer: 0 };
   try {
     s.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
-  } catch (e) { status("用唔到咪：" + e.message, true); return stop(); }
+  } catch (e) { status("用唔到咪：" + e.message, true); return stop(true); }
   if (session !== s) return s.stream.getTracks().forEach((t) => t.stop());
   s.ctx = new AudioContext();
   await s.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([worklet], { type: "application/javascript" })));
   const node = new AudioWorkletNode(s.ctx, "pcm16");
   s.ctx.createMediaStreamSource(s.stream).connect(node);
+  node.port.onmessage = (e) => {
+    if (s.ws?.readyState === 1 && s.ws.ready) s.ws.send(e.data);
+    else { s.held.push(e.data); if (s.held.length > 600) s.held.shift(); }   // 600 × 100 ms
+  };
+  connect(s);
+}
+
+function connect(s) {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  s.ws = new WebSocket(`${proto}://${location.host}/ws`);
-  s.ws.binaryType = "arraybuffer";
-  node.port.onmessage = (e) => { if (s.ws.readyState === 1) s.ws.send(e.data); };
-  s.ws.onmessage = (e) => {
+  const ws = s.ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
-    if (m.type === "ready") status('<span class="dot"></span>聽緊');
-    else if (m.type === "text") {
+    if (m.type === "ready") {
+      ws.ready = true; s.tries = 0;
+      for (const chunk of s.held.splice(0)) ws.send(chunk);
+      status('<span class="dot"></span>聽緊');
+    } else if (m.type === "text") {
       if (m.commit) $("done").textContent += m.commit;
       $("pending").textContent = m.pending;
       stick();
-    } else if (m.type === "error") status(m.message, true);
+    } else if (m.type === "error") console.warn("relay:", m.message);
   };
-  s.ws.onclose = () => { if (session === s) { status("連線斷咗，再撳開始", true); stop(true); } };
+  ws.onclose = () => {
+    if (session !== s || s.ws !== ws) return;
+    // What Soniox hadn't finished is kept as it stood, and the new stream starts on a new line.
+    const done = $("done"), pending = $("pending").textContent;
+    done.textContent += pending;
+    if (done.textContent && !done.textContent.endsWith("\n")) done.textContent += "\n";
+    $("pending").textContent = "";
+    const wait = Math.min(1000 * 2 ** s.tries++, 10000);
+    status("連線斷咗，重新連接緊…", true);
+    s.timer = setTimeout(() => { if (session === s) connect(s); }, wait);
+  };
 }
 
 function stop(keepStatus) {
@@ -125,10 +154,33 @@ function stop(keepStatus) {
   $("mic").textContent = "開始"; $("mic").classList.remove("on");
   if (!keepStatus) status("");
   if (!s) return;
+  clearTimeout(s.timer);
   s.stream?.getTracks().forEach((t) => t.stop());
   s.ctx?.close();
-  if (s.ws) { s.ws.onclose = null; if (s.ws.readyState === 1) s.ws.send("stop"); setTimeout(() => s.ws.close(), 15000); }
+  if (s.ws) { s.ws.onclose = null; if (s.ws.readyState === 1) s.ws.send("stop"); else s.ws.close(); setTimeout(() => s.ws.close(), 15000); }
 }
+
+// Desktop pop-out: a narrow always-on-top window with no browser controls (Document Picture-in-Picture, Chrome/Edge).
+// The page's own elements move into it and back when it closes; the mic and the connection stay with this tab.
+// Browsers without it get a plain popup window of the same page.
+$("pop").onclick = async () => {
+  const size = { width: 380, height: Math.min(820, screen.availHeight - 80) };
+  if (!window.documentPictureInPicture) {
+    return window.open(location.href, "cantonese-popup", `popup,width=${size.width},height=${size.height}`);
+  }
+  if (documentPictureInPicture.window) return documentPictureInPicture.window.focus();
+  const pip = await documentPictureInPicture.requestWindow(size);
+  pip.document.title = document.title;
+  pip.document.documentElement.lang = document.documentElement.lang;
+  for (const st of document.querySelectorAll("style")) pip.document.head.append(st.cloneNode(true));
+  pip.document.body.classList.add("popped");
+  const moved = [...document.body.children].filter((e) => e.tagName !== "SCRIPT");
+  pip.document.body.append(...moved);
+  const note = document.createElement("p");
+  note.className = "popped-note"; note.textContent = "字幕喺彈出視窗度。閂咗佢就會返嚟呢度。";
+  document.body.append(note);
+  pip.addEventListener("pagehide", () => { note.remove(); document.body.prepend(...moved); });
+};
 
 $("mic").onclick = () => session ? stop() : start();
 $("clear").onclick = () => { $("done").textContent = ""; $("pending").textContent = ""; };
