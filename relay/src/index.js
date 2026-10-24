@@ -1,37 +1,17 @@
 // Relay between the clients (web page, iOS app) and Soniox. Cloudflare Access sits in front of the
 // whole hostname, so a request that reaches this code is Deyao's browser or the app's service token.
 //
-// Client protocol (GET /ws[?style=written], WebSocket):
+// Client protocol (GET /ws, WebSocket):
 //   client -> relay: binary frames of 16 kHz mono PCM s16le; the text frame "stop" ends the stream.
 //   relay -> client: {"type":"ready"} once Soniox accepts audio,
 //                    {"type":"text","commit":"…","pending":"…"} (commit: append for good; pending: replaces the
 //                    previous pending text; "\n" in commit ends a line), {"type":"error","message":"…"},
-//                    {"type":"done"}. With style=written, each finished line (0-based, counted by the "\n"s in
-//                    commit) is rewritten into written Chinese: {"type":"rewrite","line":n,"text":"…"} replaces it.
+//                    {"type":"done"}.
 
 import * as OpenCC from "opencc-js";
 
 // Soniox may answer in Simplified characters; the app shows Hong Kong Traditional.
 const toHK = OpenCC.Converter({ from: "cn", to: "hk" });
-
-// 書面語: one line of mixed Cantonese / Mandarin / English speech, rewritten by Qwen through OpenRouter.
-const REWRITE_MODEL = "qwen/qwen3.7-plus";
-const REWRITE_PROMPT = "你把一行即時語音轉寫改寫成香港書面中文（繁體）。粵語口語改為規範書面語（例如 佢哋→他們、咗→了、嘅→的、唔→不、喺→在、嗰→那、未呀→了嗎、搞掂→完成），" +
-  "句子必須讀起來完全是書面語，不留任何粵語字詞；普通話句子保留原意，只轉成繁體；英文單詞和英文句子原樣保留，不翻譯；人名不變。" +
-  "不增刪內容，不解釋，只輸出改寫後的一行。";
-
-async function rewrite(env, text) {
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: REWRITE_MODEL, temperature: 0, reasoning: { enabled: false }, provider: { sort: "latency" },
-      messages: [{ role: "system", content: REWRITE_PROMPT }, { role: "user", content: text }],
-    }),
-  });
-  if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  return toHK((await res.json()).choices[0].message.content.trim());
-}
 
 export default {
   async fetch(request, env) {
@@ -40,7 +20,7 @@ export default {
       if (request.headers.get("Upgrade") !== "websocket") return new Response("expected a WebSocket", { status: 426 });
       const [client, server] = Object.values(new WebSocketPair());
       server.accept();
-      relay(server, env, url.searchParams.get("style") === "written").catch((e) => fail(server, String(e?.message || e)));
+      relay(server, env).catch((e) => fail(server, String(e?.message || e)));
       return new Response(null, { status: 101, webSocket: client });
     }
     if (url.pathname === "/health") return Response.json({ ok: true });
@@ -64,7 +44,7 @@ async function upstream(url, headers) {
   return res.webSocket;
 }
 
-async function relay(client, env, written) {
+async function relay(client, env) {
   // Audio that arrives before Soniox is ready is queued, not dropped.
   const queue = [];
   let stream = null, stopped = false;
@@ -81,29 +61,13 @@ async function relay(client, env, written) {
     });
   });
   client.addEventListener("close", () => { stopped = true; stream?.close(); });
-  // style=written: collect each line's committed text and rewrite it once the line ends (and the last one at the end).
-  let line = 0, current = "", finished = false;
-  const rewrites = [];
-  const finishLine = () => {
-    const n = line++, text = current.trim();
-    current = "";
-    if (!written || !/[\u4e00-\u9fff]/.test(text)) return;
-    rewrites.push(rewrite(env, text).then((t) => send(client, { type: "rewrite", line: n, text: t }), (e) => send(client, { type: "error", message: String(e.message || e) })));
-  };
+  let finished = false;
   stream = await openSoniox(env, {
-    text: (commit, pending) => {
-      commit = toHK(commit);
-      send(client, { type: "text", commit, pending: toHK(pending) });
-      const parts = commit.split("\n");
-      current += parts[0];
-      for (const p of parts.slice(1)) { finishLine(); current += p; }
-    },
+    text: (commit, pending) => send(client, { type: "text", commit: toHK(commit), pending: toHK(pending) }),
     error: (m) => fail(client, m),
-    done: async () => {
+    done: () => {
       if (finished) return;
       finished = true;
-      if (current.trim()) finishLine();
-      await Promise.all(rewrites);
       send(client, { type: "done" });
       try { client.close(1000, "done"); } catch {}
     },

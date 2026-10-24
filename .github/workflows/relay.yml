@@ -1,6 +1,6 @@
-# Deploys the relay Worker (and the web page it serves) to cantonese.deyaochen.com, injects the Soniox and OpenRouter keys as Worker
-# secrets from this repo's GitHub secrets, then streams the Cantonese test clip through the live relay for every
-# style with the iOS app's Access service token. A Workers deploy switches versions atomically (no downtime).
+# Deploys the relay Worker (and the web page it serves) to cantonese.deyaochen.com, injects the Soniox key as a Worker
+# secret from this repo's GitHub secrets, then streams the Cantonese test clip through the live relay with the iOS
+# app's Access service token. A Workers deploy switches versions atomically (no downtime).
 name: relay
 on:
   workflow_dispatch:
@@ -25,13 +25,12 @@ jobs:
       - name: Deploy with secrets
         env:
           SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           umask 077
-          jq -n '{SONIOX_API_KEY: env.SONIOX_API_KEY, OPENROUTER_API_KEY: env.OPENROUTER_API_KEY}' > "$RUNNER_TEMP/secrets.json"
+          jq -n '{SONIOX_API_KEY: env.SONIOX_API_KEY}' > "$RUNNER_TEMP/secrets.json"
           npx wrangler deploy --secrets-file "$RUNNER_TEMP/secrets.json"
           rm -f "$RUNNER_TEMP/secrets.json"
-      - name: Live test (原文 and 書面語)
+      - name: Live test
         env:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}

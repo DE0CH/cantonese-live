@@ -1,4 +1,4 @@
-# Deploy: wrangler deploy (CLOUDFLARE_API_TOKEN). Secrets: SONIOX_API_KEY, OPENROUTER_API_KEY (CI).
+# Deploy: wrangler deploy (CLOUDFLARE_API_TOKEN). Secret: SONIOX_API_KEY (CI).
 # Only reachable on the Access-gated custom domain: workers.dev and preview URLs are off.
 name = "cantonese-live"
 main = "src/index.js"
