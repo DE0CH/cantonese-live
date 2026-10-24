@@ -26,9 +26,7 @@ jobs:
         env:
           SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-          FUNASR_WORKSPACE: ${{ vars.FUNASR_WORKSPACE }}
         run: |
-          [ -n "$FUNASR_WORKSPACE" ] && sed -i "s/WORKSPACE\./$FUNASR_WORKSPACE./" wrangler.toml
           umask 077
           jq -n '{SONIOX_API_KEY: env.SONIOX_API_KEY, DASHSCOPE_API_KEY: env.DASHSCOPE_API_KEY}' > "$RUNNER_TEMP/secrets.json"
           npx wrangler deploy --secrets-file "$RUNNER_TEMP/secrets.json"

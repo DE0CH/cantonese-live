@@ -50,12 +50,17 @@ async function relay(client, open, env) {
   // Audio that arrives before the provider is ready is queued, not dropped.
   const queue = [];
   let provider = null, stopped = false;
+  // Binary frames may arrive as Blobs; reading them is async, so a chain keeps the audio in order.
+  let chain = Promise.resolve();
   client.addEventListener("message", (e) => {
-    if (typeof e.data === "string") {
-      if (e.data === "stop") { stopped = true; provider ? provider.stop() : null; }
-      return;
-    }
-    provider ? provider.audio(e.data) : queue.push(e.data);
+    chain = chain.then(async () => {
+      if (typeof e.data === "string") {
+        if (e.data === "stop") { stopped = true; provider?.stop(); }
+        return;
+      }
+      const chunk = e.data instanceof Blob ? await e.data.arrayBuffer() : e.data;
+      provider ? provider.audio(chunk) : queue.push(chunk);
+    });
   });
   client.addEventListener("close", () => { stopped = true; provider?.close(); });
   provider = await open(env, {
@@ -93,7 +98,7 @@ async function openSoniox(env, out) {
   });
   ws.addEventListener("close", () => out.done());
   return {
-    audio: (chunk) => ws.send(chunk),
+    audio: (chunk) => ws.send(new Uint8Array(chunk)),
     stop: () => ws.send(""),
     close: () => { try { ws.close(); } catch {} },
   };
@@ -131,7 +136,7 @@ async function openFunAsr(env, out) {
   }));
   await ready;
   return {
-    audio: (chunk) => ws.send(chunk),
+    audio: (chunk) => ws.send(new Uint8Array(chunk)),
     stop: () => ws.send(JSON.stringify({ header: { action: "finish-task", task_id: taskId, streaming: "duplex" }, payload: { input: {} } })),
     close: () => { try { ws.close(); } catch {} },
   };
