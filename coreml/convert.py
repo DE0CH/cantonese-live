@@ -251,6 +251,23 @@ class Runner:
         return tokenizer.decode(out)
 
 
+def dump(model_dir, enc, emb, p1, p2, wav, path):
+    """Reference tensors for verify.py: the mel, the encoder output, and the logits of the first decoder dispatch."""
+    from transformers import AutoProcessor
+    proc = AutoProcessor.from_pretrained(model_dir)
+    mel, frames, _ = mel_of(wav, proc)
+    with torch.no_grad():
+        embeds, n = enc(mel, torch.tensor([frames], dtype=torch.int32))
+        r = Runner(emb, p1, p2)
+        logits = r.tokens([Runner.IM_START, Runner.SYSTEM, Runner.NL])
+        audio_logits = None
+        for i in range(0, int(n[0]), T):
+            audio_logits = r.chunk(embeds[0, i:min(i + T, int(n[0]))])
+    np.savez_compressed(path, mel=mel.numpy(), frames=np.int32(frames), embeds=embeds[0, : int(n[0])].numpy(),
+                        prefix_logits=logits[0, -1].numpy(), audio_logits=audio_logits[0, -1].numpy())
+    print("dumped", path)
+
+
 def fake_int8(m):
     """Round every big weight the way linear_quantize_weights stores it, to see what int8 costs."""
     for mod in m.modules():
@@ -381,6 +398,7 @@ def main():
     ap.add_argument("--int8", action="store_true",
                     help="with --check: round weights as the converter quantizes them (int8 symmetric per channel)")
     ap.add_argument("--no-convert", action="store_true")
+    ap.add_argument("--dump", help="with --check: save reference tensors (npz) for verify.py on a Mac")
     a = ap.parse_args()
     torch.set_grad_enabled(False)
     m = load(a.model)
@@ -389,6 +407,8 @@ def main():
         fake_int8(m)
     if a.check:
         check(a.model, m, enc, emb, p1, p2, a.check, a.fp16)
+        if a.dump:
+            dump(a.model, enc, emb, p1, p2, a.check, a.dump)
     if not a.no_convert:
         th = m.thinker
         convert(enc, emb, p1, p2, split, th.config.text_config, th.config.audio_config, a.out, a.name)

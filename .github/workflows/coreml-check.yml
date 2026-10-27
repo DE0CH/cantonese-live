@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["coreml/check/**", ".github/workflows/coreml-check.yml"]
+    paths: ["coreml/check/**", "coreml/verify.py", ".github/workflows/coreml-check.yml"]
 permissions: { contents: read }
 jobs:
   check:
@@ -18,6 +18,13 @@ jobs:
         run: |
           pip3 install -q --break-system-packages huggingface_hub
           hf download DE0CH/Qwen3-ASR-1.7B-CoreML --local-dir "$RUNNER_TEMP/m" > /dev/null
+      - name: Each stage against the PyTorch reference (coremltools, CPU)
+        timeout-minutes: 40
+        run: |
+          pip3 install -q --break-system-packages coremltools==9.0 transformers numpy
+          python3 coreml/verify.py "$RUNNER_TEMP/m" coreml/check/ref.npz CPU_ONLY
+      - name: Compile
+        run: |
           cd "$RUNNER_TEMP/m"
           for p in *.mlpackage; do xcrun coremlcompiler compile "$p" . > /dev/null; done
           ls
@@ -27,4 +34,4 @@ jobs:
         run: |
           swift build -c release 2>&1 | tail -3
           sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
-          .build/release/check "$RUNNER_TEMP/m" ../../testdata/cantonese-16k.wav cpu all
+          .build/release/check "$RUNNER_TEMP/m" ../../testdata/cantonese-16k.wav cpu
