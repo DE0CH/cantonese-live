@@ -319,19 +319,23 @@ def check(model_dir, m, enc, emb, p1, p2, wav, fp16=False):
 
 # ---------------------------------------------------------------- convert
 
-def convert(enc, emb, p1, p2, split, tcfg, acfg, out, model_name):
+def convert(enc, emb, p1, p2, split, tcfg, acfg, out, model_name, only=None, precision="fp16", quantize=True):
     import coremltools as ct
     import coremltools.optimize.coreml as cto
 
     os.makedirs(out, exist_ok=True)
+    prec = ct.precision.FLOAT16 if precision == "fp16" else ct.precision.FLOAT32
     qcfg = cto.OptimizationConfig(global_config=cto.OpLinearQuantizerConfig(mode="linear_symmetric", dtype="int8",
                                                                             granularity="per_channel"))
 
     def done(name):
+        if only and not name.startswith(only):
+            return True
         return os.path.exists(os.path.join(out, name))   # re-runs pick up where a killed run stopped
 
     def save(mlmodel, name):
-        mlmodel = cto.linear_quantize_weights(mlmodel, qcfg)
+        if quantize:
+            mlmodel = cto.linear_quantize_weights(mlmodel, qcfg)
         mlmodel.save(os.path.join(out, name))
         print("saved", name, flush=True)
 
@@ -342,7 +346,7 @@ def convert(enc, emb, p1, p2, split, tcfg, acfg, out, model_name):
                                     ct.TensorType("mel_length", (1,), np.int32)],
                         outputs=[ct.TensorType("audio_embeddings", dtype=np.float16),
                                  ct.TensorType("output_length", dtype=np.int32)],
-                        minimum_deployment_target=ct.target.iOS18, compute_precision=ct.precision.FLOAT16),
+                        minimum_deployment_target=ct.target.iOS18, compute_precision=prec),
              "encoder.mlpackage")
 
     if not done("embedding.mlpackage"):
@@ -350,7 +354,7 @@ def convert(enc, emb, p1, p2, split, tcfg, acfg, out, model_name):
             tr = torch.jit.trace(emb, (torch.zeros(1, 1, dtype=torch.int32),))
         save(ct.convert(tr, inputs=[ct.TensorType("token_id", (1, 1), np.int32)],
                         outputs=[ct.TensorType("embedding", dtype=np.float16)],
-                        minimum_deployment_target=ct.target.iOS18, compute_precision=ct.precision.FLOAT16),
+                        minimum_deployment_target=ct.target.iOS18, compute_precision=prec),
              "embedding.mlpackage")
 
     H = tcfg.hidden_size
@@ -369,7 +373,7 @@ def convert(enc, emb, p1, p2, split, tcfg, acfg, out, model_name):
                                     ct.TensorType("positions", (T,), np.int32),
                                     ct.TensorType("attention_mask", (1, 1, T, MAX), np.float32)],
                         outputs=[ct.TensorType(out_name, dtype=np.float16)], states=states,
-                        minimum_deployment_target=ct.target.iOS18, compute_precision=ct.precision.FLOAT16), f"{name}.mlpackage")
+                        minimum_deployment_target=ct.target.iOS18, compute_precision=prec), f"{name}.mlpackage")
 
     n_layers = tcfg.num_hidden_layers
     cfg = {
@@ -398,6 +402,9 @@ def main():
     ap.add_argument("--int8", action="store_true",
                     help="with --check: round weights as the converter quantizes them (int8 symmetric per channel)")
     ap.add_argument("--no-convert", action="store_true")
+    ap.add_argument("--only", help="convert just this part (encoder, embedding, decoder_part1, decoder_part2)")
+    ap.add_argument("--precision", default="fp16", choices=["fp16", "fp32"])
+    ap.add_argument("--no-quantize", action="store_true")
     ap.add_argument("--dump", help="with --check: save reference tensors (npz) for verify.py on a Mac")
     a = ap.parse_args()
     torch.set_grad_enabled(False)
@@ -411,7 +418,8 @@ def main():
             dump(a.model, enc, emb, p1, p2, a.check, a.dump)
     if not a.no_convert:
         th = m.thinker
-        convert(enc, emb, p1, p2, split, th.config.text_config, th.config.audio_config, a.out, a.name)
+        convert(enc, emb, p1, p2, split, th.config.text_config, th.config.audio_config, a.out, a.name,
+                a.only, a.precision, not a.no_quantize)
 
 
 if __name__ == "__main__":

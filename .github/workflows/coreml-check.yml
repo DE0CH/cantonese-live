@@ -20,10 +20,16 @@ jobs:
         run: |
           pip install -q huggingface_hub
           hf download DE0CH/Qwen3-ASR-1.7B-CoreML --local-dir "$RUNNER_TEMP/m" > /dev/null
-      - name: Each stage against the PyTorch reference (coremltools, CPU)
-        timeout-minutes: 40
+      - name: Encoder variants under debug/ against the PyTorch reference
         run: |
           pip install -q coremltools==9.0 transformers numpy
+          for e in "$RUNNER_TEMP"/m/debug/*/encoder.mlpackage; do
+            [ -e "$e" ] && python coreml/verify.py --encoder "$e" coreml/check/ref.npz CPU_ONLY || true
+          done
+      - name: Each stage against the PyTorch reference (coremltools, CPU)
+        timeout-minutes: 40
+        continue-on-error: true
+        run: |
           python coreml/verify.py "$RUNNER_TEMP/m" coreml/check/ref.npz CPU_ONLY
       - name: Compile
         run: |

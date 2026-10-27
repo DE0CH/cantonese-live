@@ -3,6 +3,7 @@
 after the audio, then the whole greedy transcription through the same loop as the Swift runner.
 
   python verify.py MODEL_DIR ref.npz [CPU_ONLY|CPU_AND_NE|ALL]
+  python verify.py --encoder PATH.mlpackage ref.npz [UNITS]     the encoder alone
 """
 import sys
 
@@ -55,14 +56,22 @@ class Runner:
         return self.chunk(rows)
 
 
-def main():
-    d, ref = sys.argv[1], np.load(sys.argv[2])
-    cu = getattr(ct.ComputeUnit, sys.argv[3] if len(sys.argv) > 3 else "CPU_ONLY")
-    enc = ct.models.MLModel(f"{d}/encoder.mlpackage", compute_units=cu)
+def encode(path, ref, cu):
+    enc = ct.models.MLModel(path, compute_units=cu)
     o = enc.predict({"mel": ref["mel"].astype(np.float32), "mel_length": np.array([ref["frames"]], np.int32)})
     n = int(o["output_length"][0])
-    print("encoder tokens", n, "reference", ref["embeds"].shape[0])
+    print(path, "encoder tokens", n, "reference", ref["embeds"].shape[0])
     report("encoder", o["audio_embeddings"][0, :n], ref["embeds"])
+    return o, n
+
+
+def main():
+    if sys.argv[1] == "--encoder":
+        encode(sys.argv[2], np.load(sys.argv[3]), getattr(ct.ComputeUnit, sys.argv[4] if len(sys.argv) > 4 else "CPU_ONLY"))
+        return
+    d, ref = sys.argv[1], np.load(sys.argv[2])
+    cu = getattr(ct.ComputeUnit, sys.argv[3] if len(sys.argv) > 3 else "CPU_ONLY")
+    o, n = encode(f"{d}/encoder.mlpackage", ref, cu)
 
     r = Runner(d, cu)
     report("prefix logits", r.tokens([IM_START, SYSTEM, NL]), ref["prefix_logits"])
