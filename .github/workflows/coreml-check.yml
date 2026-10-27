@@ -1,0 +1,30 @@
+# Runs the converted model (Hugging Face DE0CH/Qwen3-ASR-1.7B-CoreML) natively on a macOS runner: compiles the
+# packages, transcribes the test clip with speech-swift's MLX-free CoreML path and prints the text and stage timings.
+# The runner is a VM (no Neural Engine), so this checks correctness and CPU speed, not phone speed.
+name: coreml-check
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["coreml/check/**", ".github/workflows/coreml-check.yml"]
+permissions: { contents: read }
+jobs:
+  check:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Model
+        run: |
+          pip3 install -q --break-system-packages huggingface_hub
+          hf download DE0CH/Qwen3-ASR-1.7B-CoreML --local-dir "$RUNNER_TEMP/m" > /dev/null
+          cd "$RUNNER_TEMP/m"
+          for p in *.mlpackage; do xcrun coremlcompiler compile "$p" . > /dev/null; done
+          ls
+      - name: Transcribe the test clip
+        timeout-minutes: 45
+        working-directory: coreml/check
+        run: |
+          swift build -c release 2>&1 | tail -3
+          sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
+          .build/release/check "$RUNNER_TEMP/m" ../../testdata/cantonese-16k.wav cpu all
