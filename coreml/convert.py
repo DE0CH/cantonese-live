@@ -42,9 +42,10 @@ def rms_norm(x, weight, eps, dim):
 # ---------------------------------------------------------------- encoder
 
 class Encoder(nn.Module):
-    def __init__(self, tower, cfg):
+    def __init__(self, tower, cfg, upto=None):
         super().__init__()
         self.t = tower
+        self.upto = upto   # debugging: stop after this many transformer layers
         self.heads = cfg.encoder_attention_heads
         self.chunks = MEL // CHUNK
         self.per_chunk = 13
@@ -82,7 +83,9 @@ class Encoder(nn.Module):
 
         d = self.d
         hd = d // self.heads
-        for layer in t.layers:
+        for i, layer in enumerate(t.layers):
+            if self.upto is not None and i >= self.upto:
+                return h.unsqueeze(0), n_real
             r = h
             y = layer.self_attn_layer_norm(h)
             a = layer.self_attn
@@ -191,7 +194,8 @@ def build(m):
     th = m.thinker
     acfg = th.config.audio_config
     tcfg = th.config.text_config
-    enc = Encoder(th.audio_tower, acfg).eval()
+    upto = os.environ.get("ENCODER_UPTO")
+    enc = Encoder(th.audio_tower, acfg, int(upto) if upto else None).eval()
     emb = Embedding(th.model.embed_tokens).eval()
     split = len(th.model.layers) // 2
     p1 = DecoderPart(list(th.model.layers[:split]), tcfg).eval()
@@ -265,6 +269,16 @@ def dump(model_dir, enc, emb, p1, p2, wav, path):
             audio_logits = r.chunk(embeds[0, i:min(i + T, int(n[0]))])
     np.savez_compressed(path, mel=mel.numpy(), frames=np.int32(frames), embeds=embeds[0, : int(n[0])].numpy(),
                         prefix_logits=logits[0, -1].numpy(), audio_logits=audio_logits[0, -1].numpy())
+    print("dumped", path)
+
+
+def dump_encoder(model_dir, enc, wav, path):
+    """The truncated encoder's output for the clip (ENCODER_UPTO debugging)."""
+    from transformers import AutoProcessor
+    mel, frames, _ = mel_of(wav, AutoProcessor.from_pretrained(model_dir))
+    with torch.no_grad():
+        embeds, n = enc(mel, torch.tensor([frames], dtype=torch.int32))
+    np.savez_compressed(path, mel=mel.numpy(), frames=np.int32(frames), embeds=embeds[0, : int(n[0])].numpy())
     print("dumped", path)
 
 
@@ -412,7 +426,9 @@ def main():
     enc, emb, p1, p2, split = build(m)
     if a.check and a.int8:
         fake_int8(m)
-    if a.check:
+    if a.check and enc.upto is not None:
+        dump_encoder(a.model, enc, a.check, a.dump)
+    elif a.check:
         check(a.model, m, enc, emb, p1, p2, a.check, a.fp16)
         if a.dump:
             dump(a.model, enc, emb, p1, p2, a.check, a.dump)

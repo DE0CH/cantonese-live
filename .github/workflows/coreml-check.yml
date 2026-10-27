@@ -24,7 +24,8 @@ jobs:
         run: |
           pip install -q coremltools==9.0 transformers numpy
           for e in "$RUNNER_TEMP"/m/debug/*/encoder.mlpackage; do
-            [ -e "$e" ] && python coreml/verify.py --encoder "$e" coreml/check/ref.npz CPU_ONLY || true
+            ref=$(dirname "$e")/ref.npz; [ -e "$ref" ] || ref=coreml/check/ref.npz
+            [ -e "$e" ] && python coreml/verify.py --encoder "$e" "$ref" CPU_ONLY || true
           done
       - name: Each stage against the PyTorch reference (coremltools, CPU)
         timeout-minutes: 40
