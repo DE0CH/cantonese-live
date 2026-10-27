@@ -14,15 +14,17 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }   # coremltools' native parts have no build for newer Pythons
       - name: Model
         run: |
-          pip3 install -q --break-system-packages huggingface_hub
+          pip install -q huggingface_hub
           hf download DE0CH/Qwen3-ASR-1.7B-CoreML --local-dir "$RUNNER_TEMP/m" > /dev/null
       - name: Each stage against the PyTorch reference (coremltools, CPU)
         timeout-minutes: 40
         run: |
-          pip3 install -q --break-system-packages coremltools==9.0 transformers numpy
-          python3 coreml/verify.py "$RUNNER_TEMP/m" coreml/check/ref.npz CPU_ONLY
+          pip install -q coremltools==9.0 transformers numpy
+          python coreml/verify.py "$RUNNER_TEMP/m" coreml/check/ref.npz CPU_ONLY
       - name: Compile
         run: |
           cd "$RUNNER_TEMP/m"
