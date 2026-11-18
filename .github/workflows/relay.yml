@@ -4,10 +4,9 @@
 name: relay
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
+  push:  # every branch (the gate merges a branch when this is green); main alone deploys
     paths: ["relay/**", "scripts/relay-test.mjs", "testdata/**", ".github/workflows/relay.yml"]
-concurrency: { group: relay, cancel-in-progress: false }
+concurrency: { group: "relay-${{ github.ref }}", cancel-in-progress: false }
 permissions: { contents: read }
 jobs:
   deploy:
@@ -22,7 +21,11 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: relay/package-lock.json }
       - run: npm ci
+      - name: Bundle check (on a branch nothing is deployed)
+        if: github.ref != 'refs/heads/main'
+        run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/dry"
       - name: Deploy with secrets
+        if: github.ref == 'refs/heads/main'
         env:
           SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
         run: |
@@ -31,6 +34,7 @@ jobs:
           npx wrangler deploy --secrets-file "$RUNNER_TEMP/secrets.json"
           rm -f "$RUNNER_TEMP/secrets.json"
       - name: Live test
+        if: github.ref == 'refs/heads/main'
         env:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
