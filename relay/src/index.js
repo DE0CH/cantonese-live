@@ -12,10 +12,8 @@
 // The relay keeps no session. A client that loses its connection opens a new one and replays its audio from the
 // last final_ms, so a network drop, a Soniox drop or a relay redeploy loses and repeats nothing.
 
-import * as OpenCC from "opencc-js";
-
-// Soniox may answer in Simplified characters; the app shows Hong Kong Traditional.
-const toHK = OpenCC.Converter({ from: "cn", to: "hk" });
+import { toHK } from "./hk.js";
+import { fileApi } from "./file.js";
 
 export default {
   async fetch(request, env) {
@@ -28,6 +26,7 @@ export default {
       return new Response(null, { status: 101, webSocket: client });
     }
     if (url.pathname === "/health") return Response.json({ ok: true });
+    if (url.pathname.startsWith("/api/file/")) return fileApi(request, env, url);
     return env.ASSETS.fetch(request);
   },
 };

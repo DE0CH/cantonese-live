@@ -1,2 +1,4 @@
 node_modules/
 .wrangler/
+/scripts/cloudflare-access/target/
+relay/.dev.vars

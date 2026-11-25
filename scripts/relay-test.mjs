@@ -1,5 +1,5 @@
 // Live check of the deployed relay: streams testdata/cantonese-16k.wav at real-time pace through
-// wss://$RELAY_HOST/ws with the iOS app's Access service token, and prints what came back. Fails unless the
+// wss://$RELAY_HOST/ws with the cantonese-live-ci Access service token, and prints what came back. Fails unless the
 // spoken Cantonese (我哋) comes back.
 // Env: RELAY_HOST, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET.
 import { readFileSync } from "node:fs";

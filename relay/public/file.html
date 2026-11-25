@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>檔案轉文字</title>
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="stylesheet" href="file.css">
+<style>
+@font-face { font-family: "Archivo"; font-weight: 500; src: url(fonts/archivo-latin-500-normal.woff2) format("woff2"); }
+@font-face { font-family: "Archivo"; font-weight: 600; src: url(fonts/archivo-latin-600-normal.woff2) format("woff2"); }
+@font-face { font-family: "Archivo"; font-weight: 700; src: url(fonts/archivo-latin-700-normal.woff2) format("woff2"); }
+:root {
+  --ground: #eef0f2; --panel: #ffffff; --ink: #14171a; --muted: #59626b; --rule: #d3d8dd;
+  --st-info: #005eb8; --st-bad: #c8102e;
+  --num: "Archivo", "PingFang HK", "Noto Sans HK", "Microsoft JhengHei", sans-serif;
+  --s13: 13px; --s15: 15px; --s18: 18px; --s24: 24px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --ground: #111315; --panel: #1a1d20; --ink: #e8eaec; --muted: #9ea6ae; --rule: #33393f;
+    --st-info: #5aa9ff; --st-bad: #ff4d5a; color-scheme: dark; }
+}
+* { box-sizing: border-box; margin: 0; padding: 0; border-radius: 0 !important; }
+body { background: var(--ground); color: var(--ink); font-size: var(--s15); line-height: 1.5; font-variant-numeric: tabular-nums;
+  font-family: "Archivo", "PingFang HK", "Noto Sans HK", "Microsoft JhengHei", system-ui, sans-serif;
+  padding-bottom: env(safe-area-inset-bottom); }
+[hidden] { display: none !important; }
+.bar { height: 56px; display: flex; align-items: center; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--rule);
+  padding-top: env(safe-area-inset-top); box-sizing: content-box; }
+.bar h1 { font-size: var(--s18); font-weight: 700; width: 100%; max-width: 728px; margin: 0 auto; }
+main { max-width: 760px; margin: 0 auto; padding: 16px; display: grid; gap: 8px; }
+.sheet { background: var(--panel); }
+.file { display: flex; align-items: baseline; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--rule); }
+.file .n { font-weight: 600; overflow-wrap: anywhere; }
+.file .m { margin-left: auto; color: var(--muted); font-size: var(--s13); font-family: var(--num); white-space: nowrap; }
+.status { display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 8px 16px; }
+.status .sq { width: 12px; height: 12px; background: var(--st-info); flex: none; }
+.status .t { font-weight: 600; }
+.status .m { margin-left: auto; color: var(--muted); font-size: var(--s13); font-family: var(--num); }
+.status.bad { box-shadow: inset 3px 0 0 var(--st-bad); }
+.status.bad svg { width: 18px; height: 18px; color: var(--st-bad); flex: none; }
+.status.bad .t { font-weight: 400; overflow-wrap: anywhere; }
+.btn { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border: 1px solid var(--ink);
+  background: var(--panel); color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
+.btn:hover { background: var(--ink); color: var(--panel); }
+.btn:focus-visible { outline: 3px solid var(--st-info); outline-offset: 2px; }
+.btn svg { width: 18px; height: 18px; }
+.turns { list-style: none; }
+.turns li { display: grid; grid-template-columns: 52px 1fr; column-gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--rule); }
+.turns li:last-child { border-bottom: 0; }
+.turns .ts { font-family: var(--num); font-size: var(--s13); color: var(--muted); padding-top: 4px; }
+.turns .who { grid-column: 2; font-size: var(--s13); font-weight: 700; }
+.turns .tx { grid-column: 2; font-size: var(--s18); line-height: 1.6; overflow-wrap: anywhere; }
+.empty { padding: 16px; color: var(--muted); }
+
+/* Uppy, squared and in house colours */
+.uppy-Root { font-family: inherit !important; }
+.uppy-Dashboard-inner { border: 0 !important; background: var(--panel) !important; }
+.uppy-Dashboard-AddFiles { border: 1px dashed var(--rule) !important; margin: 8px !important; }
+.uppy-Dashboard-AddFiles-title { color: var(--ink) !important; font-size: var(--s15) !important; }
+.uppy-Dashboard-browse { color: var(--ink) !important; text-decoration: underline !important; font-weight: 700; }
+.uppy-Dashboard-note { color: var(--muted) !important; }
+.uppy-StatusBar { background: var(--panel) !important; border-top: 1px solid var(--rule) !important; }
+.uppy-StatusBar-progress { background-color: var(--ink) !important; }
+.uppy-StatusBar-content, .uppy-StatusBar-statusPrimary { color: var(--ink) !important; }
+.uppy-StatusBar-statusSecondary { color: var(--muted) !important; font-family: var(--num); }
+.uppy-StatusBar-spinner { fill: var(--ink) !important; }
+.uppy-StatusBar-actionBtn { color: var(--ink) !important; }
+.uppy-StatusBar-actionBtn--upload, .uppy-StatusBar-actionBtn--retry { background: var(--ink) !important; color: var(--panel) !important; }
+.uppy-Dashboard-Item-name { color: var(--ink) !important; }
+.uppy-Dashboard-Item-status { color: var(--muted) !important; font-family: var(--num); }
+.uppy-Dashboard-Item-previewInnerWrap { background: var(--ground) !important; }
+.uppy-Dashboard-files, .uppy-DashboardContent-bar { background: var(--panel) !important; }
+.uppy-Dashboard-files, .uppy-Dashboard-Item, .uppy-DashboardContent-bar { border-color: var(--rule) !important; }
+.uppy-DashboardContent-title, .uppy-DashboardContent-back, .uppy-DashboardContent-addMore, .uppy-c-icon { color: var(--ink) !important; }
+.uppy-Dashboard-Item-progress svg circle { stroke: var(--ink) !important; }
+.uppy-Root *, .uppy-Root *::before, .uppy-Root *::after { transition: none !important; animation: none !important; box-shadow: none !important; }
+</style>
+</head>
+<body>
+<div class="bar"><h1>檔案轉文字</h1></div>
+<main>
+  <div id="pick" class="sheet"></div>
+
+  <div id="job" class="sheet" hidden>
+    <div class="file"><span class="n" id="job-name"></span><span class="m" id="job-size"></span></div>
+    <div class="status" id="job-status"><span class="sq"></span><span class="t" id="job-word"></span><span class="m" id="job-time"></span></div>
+  </div>
+
+  <div id="result" class="sheet" hidden>
+    <div class="file"><span class="n" id="res-name"></span><span class="m" id="res-len"></span></div>
+    <ul class="turns" id="rows"></ul>
+  </div>
+
+  <div id="again" hidden>
+    <button class="btn" id="again-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><path d="M12 5v14M5 12h14"/></svg>再轉一個</button>
+  </div>
+</main>
+<script src="file.js"></script>
+</body>
+</html>
