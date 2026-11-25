@@ -27,7 +27,14 @@ export default {
     }
     if (url.pathname === "/health") return Response.json({ ok: true });
     if (url.pathname.startsWith("/api/file/")) return fileApi(request, env, url);
-    return env.ASSETS.fetch(request);
+    // "/files" is the name people type for the /file page (Deyao did, 2026-11-25); any capitalisation.
+    if (/^\/files?\/?$/i.test(url.pathname)) return Response.redirect(new URL("/file", url), 301);
+    const res = await env.ASSETS.fetch(request);
+    if (res.status !== 404) return res;
+    // An address with no page: the not-found page (links to both pages), never an empty answer. Done here, not with
+    // the assets' not_found_handling, which answers a browser's navigation itself and would skip the redirect above.
+    const page = await env.ASSETS.fetch(new URL("/404", url));
+    return new Response(page.body, { status: 404, headers: page.headers });
   },
 };
 

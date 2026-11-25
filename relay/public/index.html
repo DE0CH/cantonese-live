@@ -47,6 +47,7 @@
   }
   #mic.on { background: var(--fg); color: var(--bg); }
   #pop { font: inherit; font-size: 14px; background: none; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); cursor: pointer; padding: 6px 14px; }
+  #files { font-size: 14px; color: var(--muted); padding: 6px 4px; }
   @media (pointer: coarse) { #pop { display: none; } }
   body.popped header { display: none; }
   .popped-note { color: var(--muted); font-size: 16px; text-align: center; margin: 40vh 16px 0; }
@@ -60,6 +61,7 @@
 <body>
 <header>
   <h1>粵語即時字幕</h1>
+  <a id="files" href="/file">檔案轉文字</a>
   <button id="pop" title="喺一個窄身、永遠喺最面嘅小視窗顯示字幕">彈出視窗</button>
 </header>
 <main id="scroll">
